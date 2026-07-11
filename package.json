@@ -1,0 +1,35 @@
+{
+  "name": "@metalab/design-sync-core",
+  "version": "0.0.1",
+  "description": "Shared wire contract (Edit/EditResult) and token-name/selector helpers for the design-sync system. Types + pure functions, zero runtime dependencies.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "rm -rf dist",
+    "prepare": "npm run build",
+    "test": "vitest run"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.6"
+  }
+}
