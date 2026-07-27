@@ -1,5 +1,7 @@
 # @metalab/design-sync-core
 
+The shared wire contract and token-name helpers for the design-sync suite; consumed by the Storybook addon (and the parked pipeline/plugin).
+
 Shared foundation for the design-sync system. **Types + pure string helpers only — zero runtime dependencies.**
 
 Consumed by the three sibling repos so they stop forking conventions on every change:
