@@ -42,11 +42,14 @@ export type {
   TailwindUtilityBinding,
   TailwindPropertyBinding,
   TailwindBindingSet,
+  TailwindStateContext,
+  ModifierApplicability,
 } from "./tailwind.js";
 export {
   classifyTailwindUtility,
   classifyTailwindClassList,
   composeTailwindBindings,
+  modifierApplicability,
   splitVariants,
   isDefaultState,
 } from "./tailwind.js";

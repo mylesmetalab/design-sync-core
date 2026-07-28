@@ -4,8 +4,11 @@ import {
   classifyTailwindUtility,
   classifyTailwindClassList,
   composeTailwindBindings,
+  modifierApplicability,
   splitVariants,
   isDefaultState,
+  type ModifierApplicability,
+  type TailwindStateContext,
 } from "./tailwind.js";
 
 /**
@@ -29,6 +32,7 @@ const SHADCN_CSS = `
   --color-border-neutral: var(--border-neutral);
   --color-foreground: var(--foreground);
   --color-disabled: var(--disabled);
+  --color-disabled-foreground: var(--disabled-foreground);
   --radius-sm: 0.25rem;
   --radius-md: var(--radius);
   --radius-lg: 1rem;
@@ -324,13 +328,14 @@ describe("classifyTailwindUtility — variant modifiers", () => {
     });
   }
 
-  it("excludes every modified class from a composed default-state binding", () => {
+  it("excludes provably-off modifiers from a composed binding", () => {
+    // `hover:` can't be on (nothing forces it) and `data-disabled:` can't be on
+    // when the story isn't disabled, so the unprefixed class stands.
     const set = composeTailwindBindings(
-      "bg-primary hover:bg-primary-hover data-disabled:bg-disabled dark:bg-secondary",
+      "bg-primary hover:bg-primary-hover data-disabled:bg-disabled",
       [],
       THEME,
     );
-    // Only the unprefixed class contributes.
     expect(set.bindings["background-color"]).toEqual({
       token: "primary",
       className: "bg-primary",
@@ -339,9 +344,146 @@ describe("classifyTailwindUtility — variant modifiers", () => {
     expect(set.conflicts).toEqual([]);
   });
 
-  it("leaves a property unbound when only modified classes target it", () => {
+  it("leaves a property unbound when only provably-off classes target it", () => {
     const set = composeTailwindBindings("hover:bg-primary-hover", [], THEME);
     expect(set.bindings).toEqual({});
+    expect(set.conflicts).toEqual([]);
+  });
+});
+
+describe("modifierApplicability", () => {
+  // [variants, state, verdict, why]
+  const cases: Array<[string[], TailwindStateContext, ModifierApplicability, string]> = [
+    [[], {}, "active", "no modifiers = the resting state"],
+    // Never forced: the snapshot reads a freshly-rendered, un-interacted element.
+    [["hover"], {}, "inactive", "nothing forces hover"],
+    [["focus"], {}, "inactive", "nothing forces focus"],
+    [["focus-visible"], {}, "inactive", "nothing forces focus-visible"],
+    [["focus-within"], {}, "inactive", "nothing forces focus-within"],
+    [["active"], {}, "inactive", "nothing forces :active"],
+    [["visited"], {}, "inactive", "nothing forces :visited"],
+    [["group-hover"], {}, "inactive", "group- inherits the base variant's state"],
+    [["peer-focus"], {}, "inactive", "peer- likewise"],
+    // Disabled mirrors the story arg onto the DOM, so it is knowable.
+    [["disabled"], { disabled: true }, "active", "the story is disabled"],
+    [["data-disabled"], { disabled: true }, "active", "Base UI writes data-disabled"],
+    [["aria-disabled"], { disabled: true }, "active", "same via aria"],
+    [["peer-disabled"], { disabled: true }, "active", "relation prefix stripped"],
+    [["data-disabled"], { disabled: false }, "inactive", "explicitly not disabled"],
+    [["data-disabled"], {}, "inactive", "an absent boolean prop means false"],
+    // Dark depends on the active mode.
+    [["dark"], { mode: "dark" }, "active", "mode is dark"],
+    [["dark"], { mode: "light" }, "inactive", "mode is light"],
+    [["dark"], {}, "indeterminate", "no mode was supplied"],
+    // Unknowable.
+    [["sm"], {}, "indeterminate", "viewport-dependent"],
+    [["lg"], {}, "indeterminate", "viewport-dependent"],
+    [["[&_svg]"], {}, "indeterminate", "arbitrary variant"],
+    [["data-[state=open]"], {}, "indeterminate", "an open-state hook we can't read"],
+    [["aria-expanded"], {}, "indeterminate", "not derivable from args"],
+    [["print"], {}, "indeterminate", "unknown variant"],
+    // Conjunctions: one provably-off term wins over an unknowable one.
+    [["dark", "hover"], {}, "inactive", "hover is off, so the stack is off"],
+    [["sm", "hover"], {}, "inactive", "same"],
+    [["dark", "sm"], {}, "indeterminate", "both unknowable"],
+    [
+      ["dark", "data-disabled"],
+      { disabled: true, mode: "dark" },
+      "active",
+      "both provably on",
+    ],
+    [
+      ["dark", "data-disabled"],
+      { disabled: true },
+      "indeterminate",
+      "disabled is on but the mode is unknown",
+    ],
+  ];
+
+  for (const [variants, state, verdict, why] of cases) {
+    it(`${variants.join(":") || "(none)"} + ${JSON.stringify(state)} → ${verdict} (${why})`, () => {
+      expect(modifierApplicability(variants, state)).toBe(verdict);
+    });
+  }
+});
+
+describe("composeTailwindBindings — state-aware modifiers", () => {
+  const BUTTON_BASE =
+    "rounded-md border font-sans text-base/[1] " +
+    "focus-visible:ring-[3px] " +
+    "data-disabled:bg-disabled data-disabled:border-disabled-foreground " +
+    "data-disabled:text-disabled-foreground";
+  const PRIMARY = "bg-primary border-primary text-primary-foreground hover:bg-primary-hover";
+
+  it("reports the variant's own tokens when the story is not disabled", () => {
+    const set = composeTailwindBindings(BUTTON_BASE, [PRIMARY], THEME, { disabled: false });
+    expect(set.bindings["background-color"]!.token).toBe("primary");
+    expect(set.bindings["border-color"]!.token).toBe("primary");
+    expect(set.bindings["color"]!.token).toBe("primary-foreground");
+    expect(set.conflicts).toEqual([]);
+  });
+
+  it("reports the disabled tokens when the story IS disabled", () => {
+    // This is the case that made the pre-state version lie: a `PrimaryDisabled`
+    // story paints `bg-disabled`, so claiming `background-color → primary` would
+    // be a confident wrong answer.
+    const set = composeTailwindBindings(BUTTON_BASE, [PRIMARY], THEME, { disabled: true });
+    expect(set.bindings["background-color"]).toEqual({
+      token: "disabled",
+      className: "data-disabled:bg-disabled",
+      themeVar: "color-disabled",
+    });
+    expect(set.bindings["border-color"]!.token).toBe("disabled-foreground");
+    expect(set.bindings["color"]!.token).toBe("disabled-foreground");
+    // Properties the disabled state doesn't touch are unaffected.
+    expect(set.bindings["border-top-left-radius"]!.token).toBe("radius");
+    expect(set.conflicts).toEqual([]);
+  });
+
+  it("lets a state-active class outrank a variant slot regardless of layer order", () => {
+    // The generated selector carries an extra attribute, so it wins on
+    // specificity, not just on source order.
+    const set = composeTailwindBindings(
+      "data-disabled:bg-disabled",
+      ["bg-primary"],
+      THEME,
+      { disabled: true },
+    );
+    expect(set.bindings["background-color"]!.token).toBe("disabled");
+  });
+
+  it("resolves dark: from the active mode", () => {
+    const dark = composeTailwindBindings("bg-primary dark:bg-secondary", [], THEME, {
+      mode: "dark",
+    });
+    expect(dark.bindings["background-color"]!.token).toBe("secondary");
+    const light = composeTailwindBindings("bg-primary dark:bg-secondary", [], THEME, {
+      mode: "light",
+    });
+    expect(light.bindings["background-color"]!.token).toBe("primary");
+  });
+
+  it("leaves a property unbound when an unknowable modifier could override it", () => {
+    const set = composeTailwindBindings("bg-primary dark:bg-secondary", [], THEME);
+    expect(set.bindings["background-color"]).toBeUndefined();
+    expect(set.conflicts).toEqual(["background-color"]);
+  });
+
+  it("poisons only the properties the unknowable class touches", () => {
+    const set = composeTailwindBindings("bg-primary rounded-md sm:bg-secondary", [], THEME);
+    expect(set.bindings["background-color"]).toBeUndefined();
+    expect(set.bindings["border-top-left-radius"]!.token).toBe("radius");
+  });
+
+  it("never revives a poisoned property from a state-active class", () => {
+    const set = composeTailwindBindings(
+      "bg-primary sm:bg-secondary data-disabled:bg-disabled",
+      [],
+      THEME,
+      { disabled: true },
+    );
+    expect(set.bindings["background-color"]).toBeUndefined();
+    expect(set.conflicts).toEqual(["background-color"]);
   });
 });
 
