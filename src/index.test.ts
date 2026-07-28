@@ -19,6 +19,50 @@ describe("normalizeTokenName", () => {
     expect(normalizeTokenName(undefined)).toBe("");
     expect(normalizeTokenName("")).toBe("");
   });
+
+  // Regression pin: everything that compared equal before the whitespace fix
+  // (issue #1) must still compare equal after it. If any of these ever have
+  // to change, that's a sign the fix broke an existing equivalence class —
+  // stop and reconsider rather than editing the assertion.
+  it("regression: pre-existing equivalence class is unchanged", () => {
+    const forms = ["--radius-xl", "radius/xl", "radius.xl", "Radius/XL", "radius--xl"];
+    const canon = forms.map(normalizeTokenName);
+    expect(new Set(canon).size).toBe(1);
+    expect(canon[0]).toBe("radius-xl");
+  });
+
+  it("collapses whitespace the same way as the other separators (issue #1)", () => {
+    // Real Figma variable names contain spaces: `Body/Font Weight Regular`.
+    // The code-side spelling `font-weight-regular` (or, prefixed the way the
+    // Figma name groups it, `body-font-weight-regular`) must match.
+    expect(normalizeTokenName("Body/Font Weight Regular")).toBe(
+      normalizeTokenName("body-font-weight-regular"),
+    );
+    expect(normalizeTokenName("Body/Font Weight Regular")).toBe("body-font-weight-regular");
+  });
+
+  it("collapses tabs and other whitespace characters", () => {
+    expect(normalizeTokenName("radius\txl")).toBe("radius-xl");
+    expect(normalizeTokenName("radius\nxl")).toBe("radius-xl");
+  });
+
+  it("collapses multiple consecutive spaces", () => {
+    expect(normalizeTokenName("radius    xl")).toBe("radius-xl");
+  });
+
+  it("trims leading and trailing whitespace", () => {
+    expect(normalizeTokenName("  radius-xl  ")).toBe("radius-xl");
+    expect(normalizeTokenName("\tradius-xl\t")).toBe("radius-xl");
+  });
+
+  it("treats whitespace as a separator, not as nothing", () => {
+    // Deliberate choice (see comment in token-names.ts): whitespace joins the
+    // same separator class as `-`/`/`.`, so `foo bar` == `foo-bar`, but it is
+    // NOT collapsed away entirely — `foo bar` must stay distinct from the
+    // smashed-together `foobar`.
+    expect(normalizeTokenName("foo bar")).toBe(normalizeTokenName("foo-bar"));
+    expect(normalizeTokenName("foo bar")).not.toBe(normalizeTokenName("foobar"));
+  });
 });
 
 describe("tokenNameToCssVar", () => {
