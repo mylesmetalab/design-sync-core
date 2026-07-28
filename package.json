@@ -1,6 +1,6 @@
 {
   "name": "@metalab/design-sync-core",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "Shared wire contract (Edit/EditResult) and token-name/selector helpers for the design-sync system. Types + pure functions, zero runtime dependencies.",
   "license": "MIT",
   "type": "module",
