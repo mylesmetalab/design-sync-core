@@ -21,7 +21,7 @@ Consumed by the three sibling repos so they stop forking conventions on every ch
 | `isSingleValue(value)` | Reject multi-slot CSS shorthands (`1px solid red`). |
 | `SHORTHAND_EXPANSIONS`, `expandDecl`, `INLINE_BINDING_KEY`, `normalizeBindingKey`, `compositeBorderTokens`, `extractBareVarToken` | **Binding shape** — which CSS shorthand expands to which longhands, and which key a binding is filed under. Moved here from the addon in v0.0.2 so every scanner (CSS, TSX, DOM, Tailwind) agrees; scanner disagreement was a live bug class. |
 | `parseTailwindTheme(css)`, `mergeTailwindThemes(...)`, `hasTailwindTheme(vars)` | **Tailwind v4 theme reader** — pull `@theme` custom properties out of consumer CSS. |
-| `classifyTailwindUtility(class, themeVars)`, `classifyTailwindClassList`, `composeTailwindBindings(base, overlays, themeVars)`, `splitVariants`, `isDefaultState` | **Tailwind utility → token mapper** (v0.0.2). |
+| `classifyTailwindUtility(class, themeVars)`, `classifyTailwindClassList`, `composeTailwindBindings(base, overlays, themeVars, state?)`, `modifierApplicability`, `splitVariants`, `isDefaultState` | **Tailwind utility → token mapper** (v0.0.2; state-aware modifiers in v0.0.3). |
 
 ## Tailwind utility → token mapping (v0.0.2)
 
@@ -63,14 +63,35 @@ Families covered are exactly those whose CSS property the drift snapshot compare
 `outline-*`) are left out on purpose: emitting them would only manufacture
 `flag-only` rows.
 
-### Variant modifiers do not contribute to the default state
+### Variant modifiers (the decision)
 
-`hover:bg-primary-hover` is **not** the resting background. Modified classes are
-parsed and reported in `binding.variants`, but `isDefaultState()` is false for them
-and `composeTailwindBindings` excludes them. The drift snapshot reads
-`getComputedStyle` on an un-hovered, un-forced element, so attributing a `hover:`
-token to the resting paint would be exactly the technically-true-but-inapplicable
-claim this module exists to prevent.
+A modified class never contributes to the **default** state: `isDefaultState()` is
+false for it, and `hover:bg-primary-hover` is not the resting background.
+
+But "default state" is not the same question as "what is this story painting",
+and the drift snapshot measures the second one. So `composeTailwindBindings`
+grades each modifier stack with `modifierApplicability(variants, state)`, where
+`state` carries only things the addon actually knows — the story's `disabled` arg
+and the active theme mode:
+
+| Verdict | Modifiers | Behaviour |
+|---|---|---|
+| **inactive** — provably off | `hover:`, `focus:`, `focus-visible:`, `focus-within:`, `active:`, `visited:`, `target:` (and `group-`/`peer-` forms); `disabled:`/`data-disabled:`/`aria-disabled:` when the story is not disabled; `dark:` in light mode | Contributes nothing, costs nothing. The addon reads `getComputedStyle` on a freshly-rendered element and forces no states — forcing is the Design Inspector's job — so these cannot be on. |
+| **active** — provably on | `disabled:`/`data-disabled:`/`aria-disabled:` when `disabled` is set; `dark:` in dark mode | Contributes, and **outranks** the unmodified class regardless of layer order, because the generated selector carries an extra attribute and wins on specificity. |
+| **indeterminate** — unknowable | `sm:`, `lg:`, `[&_svg]:`, `data-[state=open]:`, other `data-*`/`aria-*` hooks, `dark:` with no mode supplied | The property is left **unbound** and listed in `conflicts`. One of those classes may be what is painted, so answering from the unmodified class would be a guess. |
+
+An absent `disabled` arg counts as **false**: that is what an absent boolean prop
+means in HTML and React, and the component forwards it to the DOM. Treating it as
+*unknown* instead would poison the background, border and text bindings of every
+story of every component that has a disabled style — the useful majority — to
+guard against a case that cannot occur.
+
+Why this matters concretely: a shadcn Button carries
+`data-disabled:bg-disabled` in its `cva()` base and `bg-primary` in its
+`variant.primary` slot. A `PrimaryDisabled` story paints `bg-disabled`. Reporting
+`background-color → primary` for it would be exactly the confidently-wrong signal
+this module exists to prevent — so state has to be part of the resolution, not an
+afterthought.
 
 ### Tailwind v3
 
@@ -84,7 +105,7 @@ No npm publish. Pin via git tag, matching how the addon is consumed today:
 ```json
 {
   "dependencies": {
-    "@metalab/design-sync-core": "github:mylesmetalab/design-sync-core#v0.0.2"
+    "@metalab/design-sync-core": "github:mylesmetalab/design-sync-core#v0.0.3"
   }
 }
 ```
@@ -106,3 +127,10 @@ The `Edit` shape is on the HTTP wire between the addon, pipeline, and plugin. **
 v0.0.2 is likewise additive: it adds the binding-shape tables and the Tailwind
 mapper and changes no existing export. `design-sync-pipeline` and
 `design-sync-figma-plugin` stay pinned to `#v0.0.1` — nothing they consume moved.
+
+v0.0.3 adds state-aware modifier resolution (`composeTailwindBindings`' optional
+fourth argument, `modifierApplicability`). It **changes the behaviour** of
+`composeTailwindBindings` for class lists containing indeterminate modifiers — the
+affected property is now left unbound instead of answered from the unmodified
+class — but that function shipped in v0.0.2 and has one consumer (the addon), so
+no coordinated bump is needed. Pipeline and plugin remain on `#v0.0.1`.

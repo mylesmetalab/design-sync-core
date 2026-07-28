@@ -57,15 +57,27 @@
  * ---------------------------------------------------------------------------
  * VARIANT MODIFIERS
  * ---------------------------------------------------------------------------
- * `hover:`, `focus-visible:`, `disabled:`, `data-disabled:`, `dark:`, `sm:`,
- * `[&_svg]:` … are parsed and reported in `variants`, but a class carrying
- * ANY variant is **not** part of the default-state binding:
- * `hover:bg-primary-hover` is not the resting background. Callers building a
- * resting-state snapshot must keep only bindings with
- * `variants.length === 0` — `isDefaultState()` is provided for that. The
- * addon snapshots `getComputedStyle` on an un-hovered, un-forced element, so
- * attributing a `hover:` token to the resting paint would be exactly the kind
- * of technically-true-but-inapplicable claim this module exists to avoid.
+ * A modified class NEVER contributes to the *default* state — `isDefaultState()`
+ * is false for it, and `hover:bg-primary-hover` is not the resting background.
+ * But "default state" is not the same question as "what is this story
+ * painting", and `composeTailwindBindings` answers the second one, because that
+ * is what the drift snapshot measures. Each modifier stack is therefore graded
+ * by `modifierApplicability(variants, state)`:
+ *
+ *  - **inactive** — provably off. `hover:`, `focus-visible:`, `active:`, … : the
+ *    addon reads `getComputedStyle` on a freshly-rendered element and forces no
+ *    states (forcing is the Design Inspector's job), so these cannot be on. The
+ *    class contributes nothing and costs nothing.
+ *  - **active** — provably on. `disabled:` / `data-disabled:` / `aria-disabled:`
+ *    when the story's `disabled` arg is set: React writes the attribute, the
+ *    rule really does apply, and its selector outranks the plain utility. A
+ *    `PrimaryDisabled` story is painting `bg-disabled`, so reporting
+ *    `background-color → primary` for it would be a confident lie.
+ *  - **indeterminate** — unknowable from what the addon has: responsive
+ *    breakpoints, arbitrary variants, other `data-*` hooks, `dark:` when the
+ *    active mode wasn't supplied. One of those classes may be what is painted,
+ *    so the property is left **unbound** and listed in `conflicts` rather than
+ *    answered from the unmodified class.
  *
  * Zero runtime dependencies.
  */
@@ -235,6 +247,92 @@ export function isDefaultState(binding: TailwindUtilityBinding): boolean {
   return binding.variants.length === 0;
 }
 
+/**
+ * What the caller knows about the state of the element being snapshotted.
+ * Everything here comes from data the addon already has — story args and the
+ * active theme mode — never from inference.
+ */
+export interface TailwindStateContext {
+  /**
+   * The story's `disabled` arg. **Absent counts as false**: an absent boolean
+   * prop is exactly what "not disabled" means in HTML and React, and the
+   * component forwards it to the DOM, so `data-disabled:` classes provably do
+   * not apply. Treating absent as *unknown* instead would poison the
+   * background/border/text bindings of every story of every component that has
+   * a disabled style — the useful majority — to guard against a case that
+   * cannot occur.
+   */
+  disabled?: boolean;
+  /** Active theme mode name when known ("light" / "dark"); `dark:` depends on it. */
+  mode?: string;
+}
+
+/**
+ * Whether a modified class's state is on, off, or unknowable for the element
+ * being snapshotted.
+ */
+export type ModifierApplicability = "active" | "inactive" | "indeterminate";
+
+/**
+ * Pseudo-class variants the drift snapshot can never be in. The addon reads
+ * `getComputedStyle` on a freshly-rendered element and forces no states (state
+ * forcing is the Design Inspector's job), so these are provably off — the class
+ * contributes nothing and poisons nothing.
+ */
+const NEVER_FORCED_PSEUDO = new Set([
+  "hover",
+  "focus",
+  "focus-visible",
+  "focus-within",
+  "active",
+  "visited",
+  "target",
+]);
+
+/** Variants that mirror the story's `disabled` arg onto the DOM. */
+const DISABLED_VARIANTS = new Set(["disabled", "data-disabled", "aria-disabled"]);
+
+/** `group-hover` / `peer-disabled` inherit the base variant's state. */
+function stripRelationPrefix(variant: string): string {
+  return variant.replace(/^(group|peer)-/, "");
+}
+
+function variantApplicability(
+  variant: string,
+  state: TailwindStateContext,
+): ModifierApplicability {
+  const bare = stripRelationPrefix(variant);
+  if (NEVER_FORCED_PSEUDO.has(bare)) return "inactive";
+  if (DISABLED_VARIANTS.has(bare)) return state.disabled === true ? "active" : "inactive";
+  if (bare === "dark") {
+    if (state.mode === undefined) return "indeterminate";
+    return state.mode.toLowerCase() === "dark" ? "active" : "inactive";
+  }
+  // Responsive breakpoints, arbitrary variants (`[&_svg]`), other `data-*` /
+  // `aria-*` hooks, `group-*` relations we can't evaluate, plugin variants —
+  // all unknowable from the information the addon has.
+  return "indeterminate";
+}
+
+/**
+ * Applicability of a whole modifier stack. A stack is a conjunction, so one
+ * provably-off term makes the class inactive regardless of the rest; otherwise
+ * one unknowable term makes the class unknowable.
+ */
+export function modifierApplicability(
+  variants: string[],
+  state: TailwindStateContext = {},
+): ModifierApplicability {
+  if (variants.length === 0) return "active";
+  let sawIndeterminate = false;
+  for (const variant of variants) {
+    const verdict = variantApplicability(variant, state);
+    if (verdict === "inactive") return "inactive";
+    if (verdict === "indeterminate") sawIndeterminate = true;
+  }
+  return sawIndeterminate ? "indeterminate" : "active";
+}
+
 function stripImportant(utility: string): string {
   let out = utility;
   if (out.startsWith("!")) out = out.slice(1);
@@ -355,9 +453,10 @@ export interface TailwindBindingSet {
    */
   bindings: Record<string, TailwindPropertyBinding>;
   /**
-   * Properties deliberately left unbound because two applicable classes
-   * disagreed about the token. Kept so callers can explain the gap instead
-   * of silently showing nothing.
+   * Properties deliberately left unbound: either two applicable classes
+   * disagreed about the token, or a class whose state can't be determined could
+   * have overridden the answer. Kept so callers can explain the gap instead of
+   * silently showing nothing.
    */
   conflicts: string[];
 }
@@ -413,32 +512,70 @@ function addBinding(set: Accumulator, key: string, next: LayeredBinding): void {
  * `tailwind-merge`, so a later axis genuinely does win. Passing overlays out of
  * order would produce a wrong answer.
  *
- * Classes carrying variant modifiers (`hover:`, `data-disabled:`, `dark:`) are
- * excluded outright — see the VARIANT MODIFIERS note at the top of this file.
+ * Variant-modified classes are resolved against `state` (see VARIANT MODIFIERS
+ * at the top of this file): provably-off states contribute nothing,
+ * provably-on states override the unmodified classes, and a state that cannot
+ * be determined leaves the property unbound rather than answered wrongly.
  */
 export function composeTailwindBindings(
   base: string,
   overlays: string[],
   themeVars: TailwindThemeVars,
+  state: TailwindStateContext = {},
 ): TailwindBindingSet {
   const acc: Accumulator = { bindings: {}, conflicts: new Set<string>() };
+  const layers = [base, ...overlays];
+  const classified = layers.map((classList) => classifyTailwindClassList(classList, themeVars));
 
-  const apply = (classList: string, layer: number): void => {
-    for (const binding of classifyTailwindClassList(classList, themeVars)) {
-      if (!isDefaultState(binding)) continue;
-      for (const prop of binding.properties) {
-        addBinding(acc, normalizeBindingKey(prop), {
-          token: binding.token,
-          className: binding.className,
-          themeVar: binding.themeVar,
-          layer,
-        });
-      }
+  const record = (
+    binding: TailwindUtilityBinding,
+    layer: number,
+  ): void => {
+    for (const prop of binding.properties) {
+      addBinding(acc, normalizeBindingKey(prop), {
+        token: binding.token,
+        className: binding.className,
+        themeVar: binding.themeVar,
+        layer,
+      });
     }
   };
 
-  apply(base, 0);
-  overlays.forEach((overlay, index) => apply(overlay, index + 1));
+  // Pass 1 — unmodified classes, layered as described above.
+  classified.forEach((bindings, layer) => {
+    for (const binding of bindings) {
+      if (isDefaultState(binding)) record(binding, layer);
+    }
+  });
+
+  // Pass 2 — modified classes whose state is provably ON. These sit above every
+  // unmodified class regardless of layer, because their generated selector
+  // carries an extra attribute or pseudo-class and therefore outranks the plain
+  // utility on specificity, not just source order. The offset keeps their
+  // relative layer order intact so a variant slot still beats the base.
+  const STATE_LAYER_OFFSET = layers.length;
+  classified.forEach((bindings, layer) => {
+    for (const binding of bindings) {
+      if (isDefaultState(binding)) continue;
+      if (modifierApplicability(binding.variants, state) !== "active") continue;
+      record(binding, STATE_LAYER_OFFSET + layer);
+    }
+  });
+
+  // Pass 3 — modified classes whose state we cannot determine. One of them may
+  // be what is actually painted, so any property they could set is left unbound.
+  // This runs last and is unconditional: a poisoned property is never revived.
+  for (const bindings of classified) {
+    for (const binding of bindings) {
+      if (isDefaultState(binding)) continue;
+      if (modifierApplicability(binding.variants, state) !== "indeterminate") continue;
+      for (const prop of binding.properties) {
+        const key = normalizeBindingKey(prop);
+        delete acc.bindings[key];
+        acc.conflicts.add(key);
+      }
+    }
+  }
 
   const bindings: Record<string, TailwindPropertyBinding> = {};
   for (const [key, b] of Object.entries(acc.bindings)) {
