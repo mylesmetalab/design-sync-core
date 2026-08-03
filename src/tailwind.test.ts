@@ -407,6 +407,75 @@ describe("modifierApplicability", () => {
   }
 });
 
+describe("modifierApplicability + forcedStates", () => {
+  /**
+   * The consumer that forces a state is snapshotting the element *in* that
+   * state, so the matching variant is provably ON. Before `forcedStates`,
+   * `hover:bg-primary-hover` was reported `inactive` while a forced hover was
+   * being measured — so the value the element actually painted got attributed to
+   * the base utility or to nothing, and a fix prompt would name the wrong
+   * declaration.
+   */
+  it("activates a variant whose state is forced", () => {
+    expect(modifierApplicability(["hover"], { forcedStates: ["hover"] })).toBe("active");
+    expect(modifierApplicability(["focus-visible"], { forcedStates: ["focus-visible"] })).toBe(
+      "active",
+    );
+  });
+
+  it("leaves variants for states that are NOT forced inactive", () => {
+    expect(modifierApplicability(["focus"], { forcedStates: ["hover"] })).toBe("inactive");
+  });
+
+  it("is a no-op when nothing is forced, so old callers are unaffected", () => {
+    for (const state of [{}, { forcedStates: [] }] as TailwindStateContext[]) {
+      expect(modifierApplicability(["hover"], state)).toBe("inactive");
+    }
+  });
+
+  /**
+   * The subtle one. `group-hover:` means *the group ancestor* is hovered, and
+   * forcing hover on this element does not make that true. Checking the
+   * relation-stripped name would silently activate a class whose condition was
+   * never met — a false "this class applies" is worse than an unknown.
+   */
+  it("does not activate group-/peer- relations from a state forced on this element", () => {
+    expect(modifierApplicability(["group-hover"], { forcedStates: ["hover"] })).toBe("inactive");
+    expect(modifierApplicability(["peer-hover"], { forcedStates: ["hover"] })).toBe("inactive");
+  });
+
+  it("lets a forced disabled outrank the story's disabled arg", () => {
+    // Forcing is what the element is actually rendering, so it wins.
+    expect(modifierApplicability(["disabled"], { disabled: false, forcedStates: ["disabled"] })).toBe(
+      "active",
+    );
+    // ...but a relation prefix still isn't settled by it.
+    expect(
+      modifierApplicability(["peer-disabled"], { disabled: false, forcedStates: ["disabled"] }),
+    ).toBe("inactive");
+  });
+
+  it("still lets one provably-off term kill a conjunction", () => {
+    expect(modifierApplicability(["hover", "focus"], { forcedStates: ["hover"] })).toBe("inactive");
+  });
+
+  it("combines a forced state with a known mode", () => {
+    expect(
+      modifierApplicability(["dark", "hover"], { mode: "dark", forcedStates: ["hover"] }),
+    ).toBe("active");
+    expect(
+      modifierApplicability(["dark", "hover"], { mode: "light", forcedStates: ["hover"] }),
+    ).toBe("inactive");
+    expect(modifierApplicability(["dark", "hover"], { forcedStates: ["hover"] })).toBe(
+      "indeterminate",
+    );
+  });
+
+  it("does not activate an unrelated unknowable variant", () => {
+    expect(modifierApplicability(["sm"], { forcedStates: ["hover"] })).toBe("indeterminate");
+  });
+});
+
 describe("composeTailwindBindings — state-aware modifiers", () => {
   const BUTTON_BASE =
     "rounded-md border font-sans text-base/[1] " +

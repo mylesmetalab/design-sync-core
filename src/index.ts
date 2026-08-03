@@ -53,3 +53,17 @@ export {
   splitVariants,
   isDefaultState,
 } from "./tailwind.js";
+
+// Pseudo-state forcing, pure half (v0.0.5). The selector rewriting that lets a
+// `:hover` rule be triggered by a class, so a consumer can measure a forced
+// state. DOM plumbing (walking styleSheets, toggling the class) stays in each
+// consumer — this package has no DOM lib and that boundary is deliberate.
+export type { RewritablePseudoState } from "./pseudo-state.js";
+export {
+  REWRITABLE_PSEUDO_STATES,
+  isRewritablePseudoState,
+  pseudoStateClass,
+  pseudoStatesInSelector,
+  rewriteSelector,
+  splitSelectorList,
+} from "./pseudo-state.js";

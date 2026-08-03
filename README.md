@@ -21,7 +21,8 @@ Consumed by the three sibling repos so they stop forking conventions on every ch
 | `isSingleValue(value)` | Reject multi-slot CSS shorthands (`1px solid red`). |
 | `SHORTHAND_EXPANSIONS`, `expandDecl`, `INLINE_BINDING_KEY`, `normalizeBindingKey`, `compositeBorderTokens`, `extractBareVarToken` | **Binding shape** — which CSS shorthand expands to which longhands, and which key a binding is filed under. Moved here from the addon in v0.0.2 so every scanner (CSS, TSX, DOM, Tailwind) agrees; scanner disagreement was a live bug class. |
 | `parseTailwindTheme(css)`, `mergeTailwindThemes(...)`, `hasTailwindTheme(vars)` | **Tailwind v4 theme reader** — pull `@theme` custom properties out of consumer CSS. |
-| `classifyTailwindUtility(class, themeVars)`, `classifyTailwindClassList`, `composeTailwindBindings(base, overlays, themeVars, state?)`, `modifierApplicability`, `splitVariants`, `isDefaultState` | **Tailwind utility → token mapper** (v0.0.2; state-aware modifiers in v0.0.3). |
+| `classifyTailwindUtility(class, themeVars)`, `classifyTailwindClassList`, `composeTailwindBindings(base, overlays, themeVars, state?)`, `modifierApplicability`, `splitVariants`, `isDefaultState` | **Tailwind utility → token mapper** (v0.0.2; state-aware modifiers in v0.0.3; `forcedStates` in v0.0.5). |
+| `rewriteSelector`, `pseudoStateClass`, `pseudoStatesInSelector`, `splitSelectorList`, `REWRITABLE_PSEUDO_STATES`, `isRewritablePseudoState` | **Pseudo-state forcing, pure half** (v0.0.5). Rewrites a `:hover` rule so a class can trigger it. |
 
 ## Tailwind utility → token mapping (v0.0.2)
 
@@ -76,9 +77,35 @@ and the active theme mode:
 
 | Verdict | Modifiers | Behaviour |
 |---|---|---|
-| **inactive** — provably off | `hover:`, `focus:`, `focus-visible:`, `focus-within:`, `active:`, `visited:`, `target:` (and `group-`/`peer-` forms); `disabled:`/`data-disabled:`/`aria-disabled:` when the story is not disabled; `dark:` in light mode | Contributes nothing, costs nothing. The addon reads `getComputedStyle` on a freshly-rendered element and forces no states — forcing is the Design Inspector's job — so these cannot be on. |
-| **active** — provably on | `disabled:`/`data-disabled:`/`aria-disabled:` when `disabled` is set; `dark:` in dark mode | Contributes, and **outranks** the unmodified class regardless of layer order, because the generated selector carries an extra attribute and wins on specificity. |
+| **inactive** — provably off | `hover:`, `focus:`, `focus-visible:`, `focus-within:`, `active:`, `visited:`, `target:` (and `group-`/`peer-` forms) **when not listed in `state.forcedStates`**; `disabled:`/`data-disabled:`/`aria-disabled:` when the story is not disabled and disabled is not forced; `dark:` in light mode | Contributes nothing, costs nothing. |
+| **active** — provably on | a variant whose state the caller **forced** (`state.forcedStates`); `disabled:`/`data-disabled:`/`aria-disabled:` when `disabled` is set; `dark:` in dark mode | Contributes, and **outranks** the unmodified class regardless of layer order, because the generated selector carries an extra attribute and wins on specificity. |
 | **indeterminate** — unknowable | `sm:`, `lg:`, `[&_svg]:`, `data-[state=open]:`, other `data-*`/`aria-*` hooks, `dark:` with no mode supplied | The property is left **unbound** and listed in `conflicts`. One of those classes may be what is painted, so answering from the unmodified class would be a guess. |
+
+#### `forcedStates` (v0.0.5)
+
+The inactive row above used to be unconditional, justified by "the addon reads
+`getComputedStyle` on a freshly-rendered element and forces no states — forcing is
+the Design Inspector's job". That stopped being true when the drift auditor gained
+state comparison, and left unconditional it gives a specific, quiet wrong answer:
+while a forced `:hover` is being measured, `hover:bg-primary-hover` is reported
+`inactive`, so the value the element is *actually painting* is attributed to the
+base utility or to no token — and a generated fix prompt names the wrong
+declaration.
+
+So a caller that forces states says which:
+
+```ts
+modifierApplicability(["hover"], { forcedStates: ["hover"] }); // "active"
+modifierApplicability(["hover"], {});                          // "inactive"
+```
+
+Absent or empty is a no-op, so existing callers are unaffected. **Only list states
+you have really forced** — naming one you have not is worse than omitting it,
+because it claims a class applies when it does not.
+
+`group-`/`peer-` forms are deliberately *not* settled by this: `group-hover:` means
+the group ancestor is hovered, which forcing hover on this element does not make
+true.
 
 An absent `disabled` arg counts as **false**: that is what an absent boolean prop
 means in HTML and React, and the component forwards it to the DOM. Treating it as

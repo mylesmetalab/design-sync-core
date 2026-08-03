@@ -265,6 +265,27 @@ export interface TailwindStateContext {
   disabled?: boolean;
   /** Active theme mode name when known ("light" / "dark"); `dark:` depends on it. */
   mode?: string;
+  /**
+   * Pseudo-states the caller has **actually forced** on the element being
+   * snapshotted, e.g. `["hover"]`.
+   *
+   * Absent or empty preserves the original behaviour exactly: nothing is
+   * forced, so every pseudo-class variant below is provably off.
+   *
+   * This exists because `NEVER_FORCED_PSEUDO` used to be an unconditional
+   * truth. It rested on "the addon forces no states — state forcing is the
+   * Design Inspector's job", which stopped being true when the drift auditor
+   * gained state comparison. Left unconditional it produces a specific, quiet
+   * wrong answer: while snapshotting a forced `:hover`, `hover:bg-primary-hover`
+   * is reported `inactive`, so the value the element is *actually painting*
+   * gets attributed to the base utility or to no token at all — and the fix
+   * prompt then names the wrong declaration.
+   *
+   * Only ever list states you have really forced. A state named here that is
+   * not forced is worse than omitting it: it claims a class applies when it
+   * does not.
+   */
+  forcedStates?: readonly string[];
 }
 
 /**
@@ -274,12 +295,14 @@ export interface TailwindStateContext {
 export type ModifierApplicability = "active" | "inactive" | "indeterminate";
 
 /**
- * Pseudo-class variants the drift snapshot can never be in. The addon reads
- * `getComputedStyle` on a freshly-rendered element and forces no states (state
- * forcing is the Design Inspector's job), so these are provably off — the class
- * contributes nothing and poisons nothing.
+ * Pseudo-class variants a snapshot cannot be in **unless the caller forced
+ * them** — see `TailwindStateContext.forcedStates`.
+ *
+ * With nothing forced, a `getComputedStyle` read of a freshly-rendered element
+ * is provably not in any of these, so the class contributes nothing and poisons
+ * nothing. That was once unconditionally true and is no longer.
  */
-const NEVER_FORCED_PSEUDO = new Set([
+const FORCEABLE_PSEUDO_VARIANTS = new Set([
   "hover",
   "focus",
   "focus-visible",
@@ -302,7 +325,19 @@ function variantApplicability(
   state: TailwindStateContext,
 ): ModifierApplicability {
   const bare = stripRelationPrefix(variant);
-  if (NEVER_FORCED_PSEUDO.has(bare)) return "inactive";
+  // A forced state is a fact about THIS element, so it only settles the
+  // unprefixed variant. `group-hover:` / `peer-hover:` say an ancestor or
+  // sibling is hovered, which forcing hover here does not make true — they stay
+  // on whatever verdict they had. Checking the stripped name would silently
+  // activate a class whose condition was never met.
+  const forced = state.forcedStates;
+  if (forced !== undefined && variant === bare && forced.includes(bare)) {
+    return "active";
+  }
+  if (FORCEABLE_PSEUDO_VARIANTS.has(bare)) return "inactive";
+  // Note this sits *after* the forced check: an explicitly forced `disabled`
+  // outranks the story's `disabled` arg, because forcing is what the element is
+  // actually rendering.
   if (DISABLED_VARIANTS.has(bare)) return state.disabled === true ? "active" : "inactive";
   if (bare === "dark") {
     if (state.mode === undefined) return "indeterminate";
