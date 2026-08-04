@@ -67,3 +67,18 @@ export {
   rewriteSelector,
   splitSelectorList,
 } from "./pseudo-state.js";
+
+// Colour-space conversion and parsing. Was forked between the addon and the
+// inspector; merged here after a differential test proved the two copies agreed
+// exactly (22 parse inputs, a 2,376-point OKLCh grid). Each consumer keeps its
+// own *canonical form* — `rgb()` for drift comparison, hex for display — because
+// that is a product decision rather than colour maths.
+export type { Rgba } from "./color.js";
+export {
+  isModernColorNotation,
+  oklabToLinearSrgb,
+  oklabToRgba,
+  oklchToRgba,
+  parseHex,
+  parseModernColor,
+} from "./color.js";
