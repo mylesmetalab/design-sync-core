@@ -1,14 +1,10 @@
 # @metalab/design-sync-core
 
-The shared wire contract and token-name helpers for the design-sync suite; consumed by the Storybook addon (and the parked pipeline/plugin).
+The shared wire contract and token-name helpers for the design-sync suite; consumed by the Storybook addon.
 
 Shared foundation for the design-sync system. **Types + pure string helpers only — zero runtime dependencies.**
 
-Consumed by the three sibling repos so they stop forking conventions on every change:
-
-- `storybook-sync-addon` — drift detector / front door
-- `design-sync-pipeline` — edit router
-- `design-sync-figma-plugin` — Figma write surface
+Consumed by the Storybook addon (`storybook-sync-addon`) so conventions live in one place instead of being forked per consumer.
 
 ## What's here
 
@@ -149,15 +145,16 @@ npm test          # vitest
 
 ## Contract stability
 
-The `Edit` shape is on the HTTP wire between the addon, pipeline, and plugin. **Additive changes only** without a coordinated bump across all three consumers. This package was extracted in P1.3 by unifying the three repos' pre-existing copies to their common superset — no wire-shape change.
+The `Edit` shape is a wire contract: **additive changes only** without a
+coordinated consumer bump. The package was extracted by unifying its
+consumers' pre-existing copies to their common superset — no wire-shape change.
 
 v0.0.2 is likewise additive: it adds the binding-shape tables and the Tailwind
-mapper and changes no existing export. `design-sync-pipeline` and
-`design-sync-figma-plugin` stay pinned to `#v0.0.1` — nothing they consume moved.
+mapper and changes no existing export.
 
 v0.0.3 adds state-aware modifier resolution (`composeTailwindBindings`' optional
 fourth argument, `modifierApplicability`). It **changes the behaviour** of
 `composeTailwindBindings` for class lists containing indeterminate modifiers — the
 affected property is now left unbound instead of answered from the unmodified
 class — but that function shipped in v0.0.2 and has one consumer (the addon), so
-no coordinated bump is needed. Pipeline and plugin remain on `#v0.0.1`.
+no coordinated bump is needed.
