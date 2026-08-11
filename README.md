@@ -132,7 +132,7 @@ No npm publish. Pin via git tag, matching how the addon is consumed today:
 ```json
 {
   "dependencies": {
-    "@metalab/design-sync-core": "github:mylesmetalab/design-sync-core#v0.0.3"
+    "@metalab/design-sync-core": "github:mylesmetalab/design-sync-core#v0.0.5"
   }
 }
 ```
